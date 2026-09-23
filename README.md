@@ -174,9 +174,11 @@ local D = {
 	FlyEnabled = false,
 	FlyFrozen = false,
 	FlySpeed = 100,
+	Noclip = false,
 	SavedPosition = nil,
 	-- Menu rápido
 	Quick_Fly = true,
+	Quick_Noclip = false,
 	Quick_ESP = true,
 	Quick_SavePosition = false,
 	Quick_GotoPosition = true,
@@ -184,7 +186,7 @@ local D = {
 	Quick_ShowNames = false,
 	Quick_ShowDistance = false,
 	Quick_Highlight = false,
-	QuickOrder = {"Fly","ESP","SavePosition","GotoPosition","VerTimes","ShowNames","ShowDistance","Highlight"},
+	QuickOrder = {"Fly","Noclip","ESP","SavePosition","GotoPosition","VerTimes","ShowNames","ShowDistance","Highlight"},
 	-- Interface
 	InterfaceOn = true,
 	Minimized = false,
@@ -1559,6 +1561,7 @@ do
 	-- MOVIMENTO
 	c = addCategory("MOVIMENTO")
 	addToggle(c, "Fly", "FlyEnabled")
+	addToggle(c, "Noclip", "Noclip")
 	addToggle(c, "Congelar Fly", "FlyFrozen")
 	addSlider(c, "Velocidade do Fly", "FlySpeed", 10, 500, 1)
 	addButton(c, "Salvar posição", savePosition)
@@ -2654,6 +2657,9 @@ end
 handlers.ShowNames = refreshESP
 handlers.ShowDistance = refreshESP
 handlers.Highlight = refreshESP
+handlers.Quick_Noclip = function(_)
+	-- Quick_Noclip controla apenas a disponibilidade do botão no Menu Rápido.
+end
 handlers.Quick_ESP = function(_)
 	-- Quick_ESP controla a disponibilidade do botão no Menu Rápido.
 	-- O botão "ESP" usa setESPAll() para ligar/desligar os três recursos.
@@ -2661,6 +2667,16 @@ end
 handlers.FlyEnabled = function(v)
 	setFlyEnabled(v)
 end
+handlers.Noclip = function(v)
+	local character = LocalPlayer.Character
+	if not character then return end
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			pcall(function() part.CanCollide = not v end)
+		end
+	end
+end
+
 handlers.FlyFrozen = function(v)
 	setFlyFrozen(v)
 end
@@ -2737,6 +2753,14 @@ local quickList = create("Frame", {
 create("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder, Parent = quickList })
 
 local quickMenuOpen = true
+local quickDragHandle = create("TextButton", {
+	Name = "DragHandle", Position = UDim2.fromOffset(4, 4), Size = UDim2.fromOffset(28, 22),
+	Text = "⋮⋮", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.new(1,1,1),
+	BackgroundTransparency = 0.35, BorderSizePixel = 0, AutoButtonColor = false, Parent = quickFrame,
+})
+reg(quickDragHandle, "BackgroundColor3", "panel"); corner(quickDragHandle, 5)
+quickTitle.Position = UDim2.fromOffset(32, 0)
+quickTitle.Size = UDim2.new(1, -32, 0, 30)
 connect(quickTitle.Activated, function()
 	quickMenuOpen = not quickMenuOpen
 	quickList.Visible = quickMenuOpen
@@ -2745,6 +2769,7 @@ end)
 
 local quickDefs = {
 	Fly = {label = "✈ Fly", enabled = "Quick_Fly"},
+	Noclip = {label = "🚫 Noclip", enabled = "Quick_Noclip"},
 	ESP = {label = "👁 ESP", enabled = "Quick_ESP"},
 	SavePosition = {label = "📍 Salvar posição", enabled = "Quick_SavePosition"},
 	GotoPosition = {label = "➜ Ir para posição", enabled = "Quick_GotoPosition"},
@@ -2763,6 +2788,8 @@ end
 local function quickAction(id)
 	if id == "Fly" then
 		toggleFly()
+	elseif id == "Noclip" then
+		setSetting("Noclip", not S.Noclip)
 	elseif id == "ESP" then
 		local espOn = S.Highlight or S.ShowNames or S.ShowDistance
 		setESPAll(not espOn)
@@ -2847,15 +2874,42 @@ local function clearQuickEditorConnections()
 	quickEditorConns = {}
 end
 
-local function rebuildQuickEditor()
+local rebuildQuickEditor
+
+local function moveQuickItem(id, delta)
+	local order = S.QuickOrder
+	local index
+	for i, value in ipairs(order) do
+		if value == id then
+			index = i
+			break
+		end
+	end
+	if not index then return end
+	local newIndex = index + delta
+	if newIndex < 1 or newIndex > #order then return end
+	order[index], order[newIndex] = order[newIndex], order[index]
+	rebuildQuickMenu()
+	rebuildQuickEditor()
+	pcall(saveConfig)
+end
+
+rebuildQuickEditor = function()
 	clearQuickEditorConnections()
 	for _, row in pairs(quickEditorRows) do row:Destroy() end
 	quickEditorRows = {}
-	for _, id in ipairs(S.QuickOrder) do
+
+	for index, id in ipairs(S.QuickOrder) do
 		local def = quickDefs[id]
 		if def then
-			local row = create("TextButton", {
-				Size = UDim2.new(1,0,0,30),
+			local row = create("Frame", {
+				Size = UDim2.new(1,0,0,34),
+				BackgroundTransparency = 1,
+				LayoutOrder = index,
+				Parent = quickEditorList,
+			})
+			local toggle = create("TextButton", {
+				Size = UDim2.new(1,-72,1,0),
 				Text = (S[def.enabled] and "☑ " or "☐ ") .. def.label,
 				Font = Enum.Font.GothamMedium,
 				TextSize = 12,
@@ -2863,57 +2917,91 @@ local function rebuildQuickEditor()
 				TextColor3 = Color3.new(1,1,1),
 				BorderSizePixel = 0,
 				AutoButtonColor = true,
-				Parent = quickEditorList,
+				Parent = row,
 			})
-			reg(row, "BackgroundColor3", "panel")
-			corner(row, 7)
+			reg(toggle, "BackgroundColor3", "panel")
+			corner(toggle, 7)
+			local up = create("TextButton", {
+				Position = UDim2.new(1,-68,0,0), Size = UDim2.fromOffset(32,34),
+				Text = "↑", Font = Enum.Font.GothamBold, TextSize = 16,
+				TextColor3 = Color3.new(1,1,1), BorderSizePixel = 0, Parent = row,
+			})
+			reg(up, "BackgroundColor3", "off"); corner(up, 7)
+			local down = create("TextButton", {
+				Position = UDim2.new(1,-34,0,0), Size = UDim2.fromOffset(32,34),
+				Text = "↓", Font = Enum.Font.GothamBold, TextSize = 16,
+				TextColor3 = Color3.new(1,1,1), BorderSizePixel = 0, Parent = row,
+			})
+			reg(down, "BackgroundColor3", "off"); corner(down, 7)
 			quickEditorRows[id] = row
-			table.insert(quickEditorConns, row.Activated:Connect(function()
+			table.insert(quickEditorConns, toggle.Activated:Connect(function()
 				playClick()
 				S[def.enabled] = not S[def.enabled]
 				rebuildQuickMenu()
 				rebuildQuickEditor()
 				pcall(saveConfig)
 			end))
+			table.insert(quickEditorConns, up.Activated:Connect(function()
+				playClick(); moveQuickItem(id, -1)
+			end))
+			table.insert(quickEditorConns, down.Activated:Connect(function()
+				playClick(); moveQuickItem(id, 1)
+			end))
 		end
 	end
+
 	local reset = create("TextButton", {
-		Size = UDim2.new(1,0,0,30),
-		Text = "↺ Restaurar Menu Rápido",
-		Font = Enum.Font.GothamBold,
-		TextSize = 12,
-		TextColor3 = Color3.new(1,1,1),
-		BorderSizePixel = 0,
-		Parent = quickEditorList,
+		Size = UDim2.new(1,0,0,32), Text = "↺ Restaurar Menu Rápido",
+		Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Color3.new(1,1,1),
+		BorderSizePixel = 0, LayoutOrder = #S.QuickOrder + 1, Parent = quickEditorList,
 	})
-	reg(reset, "BackgroundColor3", "accent")
-	corner(reset, 7)
+	reg(reset, "BackgroundColor3", "accent"); corner(reset, 7)
 	table.insert(quickEditorConns, reset.Activated:Connect(function()
-		S.QuickOrder = {"Fly","ESP","SavePosition","GotoPosition","VerTimes","ShowNames","ShowDistance","Highlight"}
-		S.Quick_Fly = true; S.Quick_ESP = true; S.Quick_SavePosition = false; S.Quick_GotoPosition = true
+		playClick()
+		S.QuickOrder = {"Fly","Noclip","ESP","SavePosition","GotoPosition","VerTimes","ShowNames","ShowDistance","Highlight"}
+		S.Quick_Fly = true; S.Quick_Noclip = false; S.Quick_ESP = true; S.Quick_SavePosition = false; S.Quick_GotoPosition = true
 		S.Quick_VerTimes = false; S.Quick_ShowNames = false; S.Quick_ShowDistance = false; S.Quick_Highlight = false
-		rebuildQuickMenu()
-		rebuildQuickEditor()
-		pcall(saveConfig)
+		rebuildQuickMenu(); rebuildQuickEditor(); pcall(saveConfig)
 		notify("Menu Rápido restaurado", true)
 	end))
 end
 
+
 do
-	local startPos, startMouse
-	bindDrag(quickFrame, function(input)
-		if not S.Draggable then return false end
-		startPos = quickFrame.Position
-		startMouse = Vector2.new(input.Position.X, input.Position.Y)
-		return true
-	end, function(input)
-		if not startPos then return end
+	local dragging = false
+	local dragInput = nil
+	local startPos = nil
+	local startPoint = nil
+
+	connect(quickDragHandle.InputBegan, function(input)
+		if not S.Draggable then return end
+		local t = input.UserInputType
+		if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+			dragging = true
+			dragInput = input
+			startPos = quickFrame.Position
+			startPoint = Vector2.new(input.Position.X, input.Position.Y)
+		end
+	end)
+
+	connect(UserInputService.InputChanged, function(input)
+		if not dragging then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
 		local cam = workspace.CurrentCamera
-		local vp = cam and cam.ViewportSize or Vector2.new(800,600)
+		local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+		local dx = input.Position.X - startPoint.X
+		local dy = input.Position.Y - startPoint.Y
 		quickFrame.Position = UDim2.fromOffset(
-			math.clamp(startPos.X.Offset + input.Position.X - startMouse.X, 0, math.max(vp.X - 190, 0)),
-			math.clamp(startPos.Y.Offset + input.Position.Y - startMouse.Y, 0, math.max(vp.Y - 100, 0))
+			math.clamp(startPos.X.Offset + dx, 0, math.max(vp.X - quickFrame.AbsoluteSize.X, 0)),
+			math.clamp(startPos.Y.Offset + dy, 0, math.max(vp.Y - quickFrame.AbsoluteSize.Y, 0))
 		)
+	end)
+
+	connect(UserInputService.InputEnded, function(input)
+		if input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+			dragInput = nil
+		end
 	end)
 end
 
@@ -3025,6 +3113,15 @@ do
 	end
 end
 
+connect(LocalPlayer.CharacterAdded, function(character)
+	task.wait(0.25)
+	if S.Noclip then
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then pcall(function() part.CanCollide = false end) end
+		end
+	end
+end)
+
 --==================================================================
 -- Loops (Heartbeat)
 --==================================================================
@@ -3040,6 +3137,14 @@ do
 		local hum, root = getHum(), getRoot()
 		if hum then
 			enforceCharacter(hum)
+			if S.Noclip then
+				local character = LocalPlayer.Character
+				if character then
+					for _, part in ipairs(character:GetDescendants()) do
+						if part:IsA("BasePart") and part.CanCollide then pcall(function() part.CanCollide = false end) end
+					end
+				end
+			end
 			if root and hum.Health > 0 then
 				lastAliveCF = root.CFrame
 			end
@@ -3080,6 +3185,12 @@ end
 -- Limpeza (restaura o jogo ao original ao reexecutar / remover)
 --==================================================================
 local function restoreEnvironment()
+	local character = LocalPlayer.Character
+	if character then
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then pcall(function() part.CanCollide = true end) end
+		end
+	end
 	local root = getRoot()
 	if root then pcall(function() root.Anchored = false end) end
 	local hum = getHum()
